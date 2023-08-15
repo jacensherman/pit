@@ -5,6 +5,8 @@ from typing_extensions import Annotated
 
 app = typer.Typer()
 
+MAIN_BRANCH_NAME = 'main'
+
 def cmd(parts):
     return subprocess.run(parts, stdout=subprocess.PIPE).stdout.decode()
 
@@ -27,7 +29,7 @@ def verify_no_pending_changes():
     return True
 
 def get_commits_in_branch(branch: str = ''):
-    log = cmd(['git', 'rev-list', 'main..' + branch])
+    log = cmd(['git', 'rev-list', MAIN_BRANCH_NAME + '..' + branch])
     commits = log.split('\n')
     return commits[:-1]
 
@@ -89,7 +91,7 @@ def new(name: str, m: Annotated[str, typer.Option()] = ''):
     if message == '':
         message = name + ' <description pending>'
     maybe_enable_auto_setup_remote()
-    cmd(['git', 'checkout', 'main'])
+    cmd(['git', 'checkout', MAIN_BRANCH_NAME])
     cmd(['git', 'branch', name])
     cmd(['git', 'checkout', name])
     cmd(['git', 'commit', '--allow-empty', '-m', message])
@@ -119,8 +121,8 @@ def o(name: str, m: Annotated[str, typer.Option()]):
 # Commit Command
 @app.command('commit')
 def create(reword: Annotated[str, typer.Option()] = ''):
-    if current_branch() == 'main':
-        rprint('[red]pit cannot commit directly to branch main[red]')
+    if current_branch() == MAIN_BRANCH_NAME:
+        rprint('[red]pit cannot commit directly to branch ' + MAIN_BRANCH_NAME + '[red]')
         return
     message = reword
     if message == '':
@@ -140,8 +142,8 @@ def c(reword: Annotated[str, typer.Option()] = ''):
 # Upload Command
 @app.command('upload')
 def upload(reword: Annotated[str, typer.Option()] = ''):
-    if current_branch() == 'main':
-        return 'pit cannot upload directly to branch main'
+    if current_branch() == MAIN_BRANCH_NAME:
+        rprint('[red]pit cannot upload directly to branch ' + MAIN_BRANCH_NAME + '[red]')
     message = reword
     if message == '':
         message = get_commit_message(get_first_commit_on_branch())
@@ -165,11 +167,11 @@ def rebase(branch: str):
     if branch == curr_branch:
         rprint('Cannot rebase onto current branch')
         return
-    if curr_branch == 'main':
-        rprint('Cannot rebase main')
+    if curr_branch == MAIN_BRANCH_NAME:
+        rprint('[red]Cannot rebase ' + MAIN_BRANCH_NAME + '[red]')
         return
     if branch_is_descendant_of_current(branch):
-        rprint('Cannot rebase to descendant of self')
+        rprint('[red]Cannot rebase to descendant of self[red]')
         return
     old_base = get_parent_commit_of_branch()
     subprocess.run(['git', 'rebase', '--onto', branch, old_base, curr_branch])
