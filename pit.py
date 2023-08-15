@@ -5,11 +5,20 @@ from typing_extensions import Annotated
 
 app = typer.Typer()
 
+def cmd(parts):
+    return subprocess.run(parts, stdout=subprocess.PIPE).stdout.decode()
+
 def pending_changes():
-    result = subprocess.run(['git', 'diff-index', 'HEAD', '--'], stdout=subprocess.PIPE)
-    if (result.stdout == b''):
-        return False
-    return True
+    result = cmd(['git', '--no-pager', 'diff'])
+    if (result.strip() != ''):
+        return True
+    result = cmd(['git', '--no-pager', 'diff', '--staged'])
+    if (result.strip() != ''):
+        return True
+    return False
+
+def current_branch():
+    return cmd(['git', 'rev-parse', '--abbrev-ref', 'HEAD']).strip()
 
 def verify_no_pending_changes():
     if pending_changes():
@@ -18,15 +27,20 @@ def verify_no_pending_changes():
     return True
 
 def get_commits_in_branch(branch: str = ''):
-    log = subprocess.run(['git', 'rev-list', 'main..' + branch], stdout=subprocess.PIPE).stdout.decode()
+    log = cmd(['git', 'rev-list', 'main..' + branch])
     commits = log.split('\n')
     return commits[:-1]
+
+def get_parent_commit_of_branch():
+    commits_in_branch = get_commits_in_branch()
+    parent = cmd(['git', 'log', '--pretty=%P', '-n', '1', commits_in_branch[0]])
+    return parent.strip()
 
 def num_commits_in_branch(branch: str = ''):
     return len(get_commits_in_branch(branch))
     
 def get_commit_message(commit_hash: str):
-    return subprocess.run(['git', 'rev-list', '--format=%B', '--max-count=1', commit_hash], stdout=subprocess.PIPE).stdout.decode()
+    return cmd(['git', 'log', '--format=%B', '-n', '1', commit_hash]).strip()
 
 def get_first_commit_on_branch(branch: str = ''):
     commits = get_commits_in_branch(branch)
@@ -34,56 +48,88 @@ def get_first_commit_on_branch(branch: str = ''):
 
 def squash_branch():
     num_commits = num_commits_in_branch()
-    subprocess.run(['git', 'reset', '--soft', 'HEAD~' + str(num_commits)])
+    cmd(['git', 'reset', '--soft', 'HEAD~' + str(num_commits)])
+
+def maybe_enable_auto_setup_remote():
+    enabled = cmd(['git', 'config', 'push.autoSetupRemote']).strip()
+    if (enabled != 'true'):
+        cmd(['git', 'config', '--add', '--bool', 'push.autoSetupRemote', 'true'])
+
+def all_branches():
+    branches = cmd(['git', 'branch', '-a']).strip().split('\n')
+    branches_canonical = []
+    for branch in branches:
+        branches_canonical.append(branch.strip().replace('* ', '').replace('remotes/origin/', ''))
+    return set(branches_canonical)
+
+def branch_is_descendant_of_current(branch: str):
+    curr_branch = current_branch()
+    cmd(['git', 'checkout', branch])
+    commit = cmd(['git', 'rev-parse', 'HEAD']).strip()
+    cmd(['git', 'checkout', curr_branch])
+    descendants = cmd(['git', 'log', '--all', '--ancestry-path', curr_branch + '..'])
+    if descendants.find(commit) > 0:
+        return True
+    return False
 
 # Test Command
 @app.command('test')
 def test():
-    get_commit_message(get_first_commit_on_branch())
-
+    print(cmd(['git', 'log', '--all', '--ancestry-path', current_branch() + '..']))
 
 # New Command
 @app.command('new')
-def new(name: str, m: Annotated[str, typer.Option()]):
+def new(name: str, m: Annotated[str, typer.Option()] = ''):
+    if name in all_branches():
+        rprint('[red]Branch named "' + name + '" alreday exists.[red]')
+        return
     if not verify_no_pending_changes():
         return
-    subprocess.run(['git', 'checkout', 'main'])
-    subprocess.run(['git', 'branch', name])
-    subprocess.run(['git', 'checkout', name])
-    subprocess.run(['git', 'commit', '--allow-empty', '-m', '"' + m + "'"])
-    subprocess.run(['git', 'push', '--force', '--set-upstream', 'origin', 'main'])
+    message = m
+    if message == '':
+        message = name + ' <description pending>'
+    maybe_enable_auto_setup_remote()
+    cmd(['git', 'checkout', 'main'])
+    cmd(['git', 'branch', name])
+    cmd(['git', 'checkout', name])
+    cmd(['git', 'commit', '--allow-empty', '-m', message])
+    # cmd(['git', 'push', '--force'])
 
 # New Shorthand
-@app.command('new')
-def n(name: str, m: Annotated[str, typer.Option()]):
+@app.command('n')
+def n(name: str, m: Annotated[str, typer.Option()] = ''):
     new(name, m)
 
 
 # Open Command
 @app.command('open')
-def open(name: str, m: Annotated[str, typer.Option()]):
+def open(name: str):
     if not verify_no_pending_changes():
         return
-    subprocess.run(['git', 'checkout', name])
+    cmd(['git', 'checkout', name])
 
 # Open shorthand
 @app.command('o')
 def o(name: str, m: Annotated[str, typer.Option()]):
     if not verify_no_pending_changes():
         return
-    subprocess.run(['git', 'checkout', name])
+    cmd(['git', 'checkout', name])
 
 
 # Commit Command
 @app.command('commit')
 def create(reword: Annotated[str, typer.Option()] = ''):
+    if current_branch() == 'main':
+        rprint('[red]pit cannot commit directly to branch main[red]')
+        return
     message = reword
     if message == '':
         message = get_commit_message(get_first_commit_on_branch())
-    num_commits = num_commits_in_branch()
-    subprocess.run(['git', 'add', '-A'])
-    subprocess.run(['git', 'reset', '--soft', 'HEAD~' + str(num_commits)])
-    subprocess.run(['git', 'commit', '--allow-empty', '-m', '"' + message + "'"])
+    maybe_enable_auto_setup_remote()
+    cmd(['git', 'add', '-A'])
+    cmd(['git', 'commit', '-m', '"pending squash"'])
+    squash_branch()
+    cmd(['git', 'commit', '--allow-empty', '-m', message])
 
 # Commit Shorthand
 @app.command('c')
@@ -94,14 +140,17 @@ def c(reword: Annotated[str, typer.Option()] = ''):
 # Upload Command
 @app.command('upload')
 def upload(reword: Annotated[str, typer.Option()] = ''):
+    if current_branch() == 'main':
+        return 'pit cannot upload directly to branch main'
     message = reword
     if message == '':
         message = get_commit_message(get_first_commit_on_branch())
-    num_commits = num_commits_in_branch()
-    subprocess.run(['git', 'add', '-A'])
-    subprocess.run(['git', 'reset', '--soft', 'HEAD~' + str(num_commits)])
-    subprocess.run(['git', 'commit', '--allow-empty', '-m', '"' + message + "'"])
-    subprocess.run(['git', 'push', '--force'])
+    maybe_enable_auto_setup_remote()
+    cmd(['git', 'add', '-A'])
+    cmd(['git', 'commit', '-m', '"pending squash"'])
+    squash_branch()
+    cmd(['git', 'commit', '--allow-empty', '-m', message])
+    # cmd(['git', 'push', '--force'])
 
 # Upload Shorthand
 @app.command('u')
@@ -109,24 +158,29 @@ def u(reword: Annotated[str, typer.Option()] = ''):
     upload(u)
 
 
-# Sync Command
-@app.command('sync')
-def sync():
-    subprocess.run(['git', 'rebase', '-i', 'main'])
-
-@app.command('s')
-def s():
-    sync()
-
-
 # Rebase Command
 @app.command('rebase')
 def rebase(branch: str):
-    subprocess.run(['git', 'rebase', '-i', branch])
+    curr_branch = current_branch()
+    if branch == curr_branch:
+        rprint('Cannot rebase onto current branch')
+        return
+    if curr_branch == 'main':
+        rprint('Cannot rebase main')
+        return
+    if branch_is_descendant_of_current(branch):
+        rprint('Cannot rebase to descendant of self')
+        return
+    old_base = get_parent_commit_of_branch()
+    subprocess.run(['git', 'rebase', '--onto', branch, old_base, curr_branch])
+    subprocess.run(['git', 'push', '--force'])
+    subprocess.run(['git', 'push', '--force'])
 
+# Rebase Shorthand
 @app.command('r')
 def r(branch: str):
     rebase(branch)
+
 
 if __name__ == '__main__':
     app()
