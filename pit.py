@@ -5,7 +5,7 @@ from typing_extensions import Annotated
 
 app = typer.Typer()
 
-MAIN_BRANCH_NAME = 'main'
+MAIN_BRANCH_NAME = 'master'
 
 def cmd(parts):
     return subprocess.run(parts, stdout=subprocess.PIPE).stdout.decode()
@@ -95,7 +95,7 @@ def new(name: str, m: Annotated[str, typer.Option()] = ''):
     cmd(['git', 'branch', name])
     cmd(['git', 'checkout', name])
     cmd(['git', 'commit', '--allow-empty', '-m', message])
-    # cmd(['git', 'push', '--force'])
+    cmd(['git', 'push', '--force'])
 
 # New Shorthand
 @app.command('n')
@@ -152,7 +152,7 @@ def upload(reword: Annotated[str, typer.Option()] = ''):
     cmd(['git', 'commit', '-m', '"pending squash"'])
     squash_branch()
     cmd(['git', 'commit', '--allow-empty', '-m', message])
-    # cmd(['git', 'push', '--force'])
+    cmd(['git', 'push', '--force'])
 
 # Upload Shorthand
 @app.command('u')
